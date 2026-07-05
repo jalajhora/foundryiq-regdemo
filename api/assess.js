@@ -1,4 +1,5 @@
-export const config = { runtime: 'edge' };
+// Node.js serverless function (not Edge) — longer timeout ceiling for slower model calls
+export const config = { maxDuration: 60 };
 
 const LIVE_SYSTEM = `You are the senior regulatory affairs and environmental toxicology expert inside FoundryIQ, an agentic compliance platform for fragrance and skincare. You review cosmetic formulations for global market compliance and environmental impact. You are precise, conservative and strictly evidence-based.
 
@@ -20,6 +21,7 @@ Method and rules:
 - Every non-pass finding needs a concrete, actionable fix: a reformulation route or the exact evidence to obtain, naming alternative materials where relevant.
 - If you are unsure of an exact threshold, say so in the detail and lower the confidence rather than inventing a number. Never fabricate a limit.
 - Trusted Case confidence reflects data completeness of the input, not how favourable the outcome is.
+- BE CONCISE. Each "detail" field: 1-2 sentences max. Each "fix" field: 1 sentence max. Limit each assessment lane to at most 3 findings, prioritising only the most material ones. This keeps the response fast to generate.
 
 Return ONLY one JSON object — no markdown fences, no prose before or after. Use EXACTLY this shape:
 {
@@ -34,46 +36,39 @@ Return ONLY one JSON object — no markdown fences, no prose before or after. Us
  "ledger": [ { "evidence": string, "source": string, "date": string, "jurisdiction": string, "confidence": number 0-100, "status": "Verified"|"Partial"|"Incomplete"|"Missing" } ],
  "assessments": {
    "regulatory": [ { "sev": "critical"|"high"|"medium"|"pass", "ing": string, "title": string, "detail": string, "fix": string|null } ],
-   "safety": [ ...same shape ],
-   "environmental": [ ...same shape ],
-   "claims": [ ...same shape ],
-   "supplier": [ ...same shape ]
+   "safety": [ ...same shape, max 3 items ],
+   "environmental": [ ...same shape, max 3 items ],
+   "claims": [ ...same shape, max 3 items ],
+   "supplier": [ ...same shape, max 3 items ]
  },
  "exceptions": [ { "sev": "critical"|"high"|"medium"|"pass", "issue": string, "disposition": "Escalate → Reformulate"|"Escalate → Human confirm"|"Request Evidence"|"Auto-clear"|"Human confirm", "note": string } ],
  "decision": { "risk": "Low"|"Medium"|"High"|"Critical", "recommendation": string, "rationale": string },
  "monitoring": string[]
 }
-Limit each assessment lane to at most 4 findings, prioritising the most material. Keep each detail to 2-3 sentences.`;
+Keep the total response compact — this speeds generation and avoids timeouts. Maximum 3 findings per assessment lane.`;
 
-export default async function handler(req) {
+export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
-      },
-    });
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    return res.status(204).end();
   }
 
   if (req.method !== 'POST') {
-    return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    return new Response(JSON.stringify({ error: 'API key not configured. Set ANTHROPIC_API_KEY in Vercel Environment Variables and redeploy.' }), { status: 500 });
+    return res.status(500).json({ error: 'API key not configured. Set ANTHROPIC_API_KEY in Vercel Environment Variables and redeploy.' });
   }
 
-  let body;
-  try {
-    body = await req.json();
-  } catch {
-    return new Response(JSON.stringify({ error: 'Invalid request body' }), { status: 400 });
-  }
+  const { productName, category, markets, claims, formula } = req.body || {};
 
-  const { productName, category, markets, claims, formula } = body;
+  if (!formula || !String(formula).trim()) {
+    return res.status(400).json({ error: 'Formula is required' });
+  }
 
   const userContent =
     "Assess this cosmetic formulation for compliance and environmental impact.\n\n" +
@@ -93,7 +88,7 @@ export default async function handler(req) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 4096,
+        max_tokens: 3000,
         system: LIVE_SYSTEM,
         messages: [{ role: 'user', content: userContent }],
       }),
@@ -101,24 +96,15 @@ export default async function handler(req) {
 
     if (!upstream.ok) {
       const err = await upstream.text();
-      return new Response(JSON.stringify({ error: 'Upstream API error', detail: err }), {
-        status: upstream.status,
-        headers: { 'Access-Control-Allow-Origin': '*' },
-      });
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      return res.status(upstream.status).json({ error: 'Upstream API error', detail: err });
     }
 
     const data = await upstream.json();
-    return new Response(JSON.stringify(data), {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-      },
-    });
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    return res.status(200).json(data);
   } catch (err) {
-    return new Response(JSON.stringify({ error: 'Proxy error', detail: err.message }), {
-      status: 500,
-      headers: { 'Access-Control-Allow-Origin': '*' },
-    });
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    return res.status(500).json({ error: 'Proxy error', detail: err.message });
   }
 }
