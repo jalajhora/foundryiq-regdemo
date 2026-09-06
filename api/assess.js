@@ -23,7 +23,7 @@ Rules:
 - Be concentration-aware; name the specific regulation/annex in each finding's detail.
 - Prohibited => "critical". Over-limit / gating substantiation => "high". Verify / monitor => "medium". Compliant => "pass".
 - Every non-pass finding needs a concrete fix naming alternative materials where relevant.
-- If a document is unreadable or a value is missing, lower confidence and list it under trustedCase.missing — never invent limits.
+- If a document is unreadable or a value is missing, lower confidence and list it under trustedCase.missing (at most 4 items, each under 8 words) — never invent limits.
 - If the documents contain no recognizable formulation, return a valid JSON object with an empty assessments structure and a headline explaining what was missing.
 - BE EXTREMELY CONCISE. detail: one sentence <=20 words. fix: one sentence <=15 words. Max 2 findings per lane (most material only). Skip pass findings. This must generate quickly.
 
@@ -33,7 +33,7 @@ Return ONLY one JSON object — no markdown fences, no prose. Shape:
 {
  "productName": string, "category": string, "markets": string[], "claims": string[],
  "ingredientCount": number, "supplierCount": number, "headline": string,
- "trustedCase": { "confidence": number, "missing": string[] },
+ "trustedCase": { "confidence": number, "missing": string[] (max 4 items, each under 8 words) },
  "ingredients": [ { "name": string, "concentration": number, "function": string, "chinaIecicStatus": "Listed"|"Not Listed"|"Uncertain" } ],
  "ledger": [ { "evidence": string, "source": string, "date": string, "jurisdiction": string, "confidence": number, "status": "Verified"|"Partial"|"Incomplete"|"Missing" } ],
  "assessments": {
@@ -43,7 +43,7 @@ Return ONLY one JSON object — no markdown fences, no prose. Shape:
  "exceptions": [ { "sev": string, "issue": string, "disposition": string, "note": string } ],
  "decision": { "risk": "Low"|"Medium"|"High"|"Critical", "recommendation": string, "rationale": string }
 }
-Max 4 ledger rows, max 2 findings per lane, max 4 exceptions, max 25 ingredients (list the most material ones up to that cap — prioritize completeness of the core formula over exhaustiveness).
+Max 4 ledger rows, max 2 findings per lane, max 4 exceptions, max 15 ingredients (list the most material ones up to that cap — prioritize completeness of the core formula over exhaustiveness). Every array in this schema has a hard cap — never exceed it, even if the source document contains more. This is essential to finish generating quickly and completely.
 CRITICAL JSON RULES: Output must be a single strictly-valid JSON object. Keep every string on one line (no line breaks inside string values). Do not use double-quotes inside string values — use single quotes or omit them. No trailing commas. No commentary before or after the JSON.`;
 
 export default async function handler(req, res) {
@@ -92,7 +92,7 @@ export default async function handler(req, res) {
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
         model: 'claude-haiku-4-5',
-        max_tokens: 2500,
+        max_tokens: 3500,
         system: LIVE_SYSTEM,
         messages: [{ role: 'user', content }],
       }),
