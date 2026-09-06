@@ -78,8 +78,7 @@ const OK_SEV = ["critical", "high", "medium", "pass"];
 function parseLoose(text) {
   const s = text.indexOf("{");
   if (s < 0) throw new Error("No JSON found in the model response.");
-  const e = text.lastIndexOf("}");
-  let str = e > s ? text.slice(s, e + 1) : text.slice(s);
+  const raw = text.slice(s);
 
   const sanitize = (v) => v
     // strip markdown fences if any slipped in
@@ -91,26 +90,45 @@ function parseLoose(text) {
     // remove trailing commas before } or ]
     .replace(/,\s*([}\]])/g, "$1");
 
-  const attempts = [];
-  attempts.push(str);
-  attempts.push(sanitize(str));
-
-  // repair a truncated object: trim to last complete pair, then close open brackets/braces
-  const repair = (v) => {
-    let r = v;
-    const lastComma = Math.max(r.lastIndexOf("},"), r.lastIndexOf("],"), r.lastIndexOf('",'));
-    if (lastComma > 0) r = r.slice(0, lastComma + 1);
-    r = r.replace(/,\s*$/, "");
-    r += "]".repeat(Math.max(0, (r.match(/\[/g) || []).length - (r.match(/\]/g) || []).length));
-    r += "}".repeat(Math.max(0, (r.match(/\{/g) || []).length - (r.match(/\}/g) || []).length));
-    return r;
-  };
-  attempts.push(repair(sanitize(str)));
-
-  let lastErr;
+  const attempts = [raw, sanitize(raw)];
   for (const candidate of attempts) {
-    try { return JSON.parse(candidate); } catch (err) { lastErr = err; }
+    try { return JSON.parse(candidate); } catch (_) { /* fall through to repair */ }
   }
+
+  // Stack-based repair for a truncated response (hit max_tokens mid-object).
+  // Scans the text tracking string state (with escape handling) and bracket
+  // nesting, recording every point where a comma appears outside a string
+  // together with the exact bracket stack at that moment. It then cuts at
+  // the most recent such point and closes every open bracket in the correct
+  // reverse order — a naive "count brackets, then append closers" approach
+  // produces invalid JSON for anything nested beyond one level, since it
+  // ignores nesting order.
+  const text2 = sanitize(raw);
+  const stack = [];
+  let inString = false, escapeNext = false;
+  const safeCuts = [];
+
+  for (let i = 0; i < text2.length; i++) {
+    const c = text2[i];
+    if (inString) {
+      if (escapeNext) { escapeNext = false; }
+      else if (c === "\\") { escapeNext = true; }
+      else if (c === '"') { inString = false; }
+      continue;
+    }
+    if (c === '"') { inString = true; continue; }
+    if (c === "{" || c === "[") { stack.push(c); continue; }
+    if (c === "}" || c === "]") { stack.pop(); continue; }
+    if (c === ",") { safeCuts.push({ index: i, stack: stack.slice() }); }
+  }
+
+  for (let k = safeCuts.length - 1; k >= 0; k--) {
+    const { index, stack: snap } = safeCuts[k];
+    let candidate = text2.slice(0, index);
+    for (let j = snap.length - 1; j >= 0; j--) candidate += snap[j] === "{" ? "}" : "]";
+    try { return JSON.parse(candidate); } catch (_) { /* try an earlier cut point */ }
+  }
+
   throw new Error("The model's response wasn't valid JSON. Run it again — this is usually transient.");
 }
 function normalize(p) {
