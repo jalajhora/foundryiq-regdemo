@@ -6,6 +6,13 @@ import {
 } from "lucide-react";
 import mammoth from "mammoth";
 import * as XLSX from "xlsx";
+import * as pdfjsLib from "pdfjs-dist";
+
+// Point the pdf.js worker at a CDN build matching whatever version got
+// installed, so this works regardless of bundler config. To self-host
+// instead: copy node_modules/pdfjs-dist/build/pdf.worker.min.mjs into
+// /public and set this to that local path.
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
 /* ------------------------------------------------------------------ */
 /*  FoundryIQ — PIF Assessment (in-Claude test build)                 */
@@ -71,6 +78,60 @@ const readAsText = (file) => new Promise((res, rej) => {
   r.readAsText(file);
 });
 const fmtSize = (b) => b < 1024 ? b + " B" : b < 1048576 ? (b / 1024).toFixed(0) + " KB" : (b / 1048576).toFixed(1) + " MB";
+
+// Extracts the embedded text layer from a PDF entirely in the browser —
+// same idea as the mammoth/xlsx extraction below, just for PDFs. Returns
+// "" for a scanned/flattened PDF with no text layer (caller falls back to
+// sending it as a raw document block, size permitting).
+const readPdfAsText = async (file) => {
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  let text = "";
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    text += content.items.map((it) => it.str).join(" ") + "\n";
+    if (text.length > 60000) break; // plenty for the assess prompt's cap; stop reading early
+  }
+  return text.trim();
+};
+
+// Downscales + recompresses an image client-side before it's ever sent
+// anywhere, so a multi-MB artwork/packaging file doesn't blow the request
+// payload. Claude's vision read doesn't need print resolution.
+const downscaleImage = (file, maxDim = 1800, quality = 0.82) => new Promise((resolve, reject) => {
+  const img = new Image();
+  const url = URL.createObjectURL(file);
+  img.onload = () => {
+    let { width, height } = img;
+    if (width > maxDim || height > maxDim) {
+      const scale = maxDim / Math.max(width, height);
+      width = Math.round(width * scale);
+      height = Math.round(height * scale);
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width; canvas.height = height;
+    canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+    URL.revokeObjectURL(url);
+    canvas.toBlob((blob) => {
+      if (!blob) { reject(new Error("Could not compress " + file.name)); return; }
+      const r = new FileReader();
+      r.onload = () => resolve({ data: String(r.result).split(",")[1], mediaType: "image/jpeg" });
+      r.onerror = () => reject(new Error("Could not read compressed " + file.name));
+      r.readAsDataURL(blob);
+    }, "image/jpeg", quality);
+  };
+  img.onerror = () => reject(new Error("Could not load image " + file.name));
+  img.src = url;
+});
+
+// Below this many extracted characters, treat a PDF as effectively
+// textless (scanned/flattened with no text layer).
+const PDF_TEXT_MIN_CHARS = 200;
+// Raw-fallback ceiling for a textless PDF sent as a document block: stays
+// well under Vercel's fixed 4.5MB function request-body limit once
+// base64-encoded (~33% inflation).
+const RAW_PDF_FALLBACK_MAX_BYTES = 3.5 * 1024 * 1024;
 
 /* ---------- normalize + parse-with-repair ---------- */
 const clampPct = (n) => Math.max(0, Math.min(100, Math.round(Number(n) || 0)));
@@ -265,10 +326,19 @@ export default function App() {
     const payload = [];
     for (const f of files) {
       if (f.kind === "pdf") {
-        payload.push({ type: "pdf", name: f.name, data: await readAsBase64(f.file) });
+        let text = "";
+        try { text = await readPdfAsText(f.file); } catch (_) { /* fall through to raw handling below */ }
+        if (text.length >= PDF_TEXT_MIN_CHARS) {
+          payload.push({ type: "text", name: f.name, text: text.slice(0, 40000) });
+        } else if (f.file.size <= RAW_PDF_FALLBACK_MAX_BYTES) {
+          // No usable text layer (scanned/flattened) but small enough to send as-is for a vision read.
+          payload.push({ type: "pdf", name: f.name, data: await readAsBase64(f.file) });
+        } else {
+          throw new Error(`${f.name} looks like a scanned PDF with no extractable text and is too large (${fmtSize(f.file.size)}) to send as-is. Re-export it with a text layer, or split/compress it below ~3.5MB.`);
+        }
       } else if (f.kind === "image") {
-        const mt = /\.png$/i.test(f.name) ? "image/png" : /\.gif$/i.test(f.name) ? "image/gif" : /\.webp$/i.test(f.name) ? "image/webp" : "image/jpeg";
-        payload.push({ type: "image", name: f.name, data: await readAsBase64(f.file), mediaType: mt });
+        const { data, mediaType } = await downscaleImage(f.file);
+        payload.push({ type: "image", name: f.name, data, mediaType });
       } else if (f.kind === "docx") {
         const { value } = await mammoth.extractRawText({ arrayBuffer: await f.file.arrayBuffer() });
         payload.push({ type: "text", name: f.name, text: value.slice(0, 20000) });
@@ -293,6 +363,10 @@ export default function App() {
 
     try {
       const filesPayload = await buildFilesPayload();
+      const approxBytes = filesPayload.reduce((sum, f) => sum + (f.data ? f.data.length * 0.75 : (f.text ? f.text.length : 0)), 0);
+      if (approxBytes > 4 * 1024 * 1024) {
+        throw new Error(`This PIF is still ~${(approxBytes / 1048576).toFixed(1)}MB after extraction/compression — trim or split the largest document(s) before assessing.`);
+      }
       const res = await fetch("/api/assess", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
