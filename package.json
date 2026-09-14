@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "start": "node server.js",
+    "test": "node --test server.test.js",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"

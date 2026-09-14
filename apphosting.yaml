@@ -1,0 +1,7 @@
+scripts:
+  buildCommand: npm run build
+  runCommand: npm start
+
+outputFiles:
+  serverApp:
+    include: [dist, server.js, api, package.json]

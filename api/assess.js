@@ -56,7 +56,7 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: 'API key not configured. Set ANTHROPIC_API_KEY in Vercel Environment Variables and redeploy.' });
+  if (!apiKey) return res.status(500).json({ error: 'API key not configured. Set ANTHROPIC_API_KEY in your hosting runtime environment and redeploy.' });
 
   const { productName, category, markets, claims, files } = req.body || {};
 
