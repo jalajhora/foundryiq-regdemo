@@ -3,6 +3,9 @@ import { readFile } from 'node:fs/promises';
 import { dirname, extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assess from './api/assess.js';
+import formulate from './api/formulate.js';
+
+const apiRoutes = { '/api/assess': assess, '/api/formulate': formulate };
 
 const dist = resolve(dirname(fileURLToPath(import.meta.url)), 'dist');
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
@@ -14,7 +17,8 @@ createServer(async (req, res) => {
   res.json = (body) => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(body)); };
   try {
     const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
-    if (pathname === '/api/assess') {
+    const apiHandler = Object.hasOwn(apiRoutes, pathname) ? apiRoutes[pathname] : null;
+    if (apiHandler) {
       if (req.method === 'POST') {
         if (req.headers['content-type']?.split(';')[0].trim() !== 'application/json') {
           return res.status(415).json({ error: 'Expected application/json' });
@@ -33,7 +37,7 @@ createServer(async (req, res) => {
           return res.status(400).json({ error: 'Expected an object with a files array of document objects' });
         }
       }
-      return await assess(req, res);
+      return await apiHandler(req, res);
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') return res.status(405).json({ error: 'Method not allowed' });
     const file = resolve(dist, '.' + (pathname === '/' ? '/index.html' : pathname));

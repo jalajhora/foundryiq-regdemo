@@ -3,6 +3,7 @@ import {
   UploadCloud, FileText, FileSpreadsheet, Image as ImageIcon, File as FileIcon,
   X, Loader2, FlaskConical, Leaf, Tag, Truck, Gavel,
   AlertCircle, CheckCircle2, User, Fingerprint, Layers, Sparkles, Beaker, Download,
+  SprayCan, Droplets, Palette, Wand2, FlaskRound, ListChecks,
 } from "lucide-react";
 import mammoth from "mammoth";
 import * as XLSX from "xlsx";
@@ -46,7 +47,29 @@ const STEPS = [
   { id: "decision", label: "Risk Decision", sub: "Orchestrator + Guardian" },
 ];
 
-/* System prompt lives server-side in api/assess.js — never shipped to the browser. */
+// New product development (NPD) — the Formulation Co-Pilot designs one
+// option per strategy. Keys must match STRATEGIES in api/formulate.js.
+const PRODUCT_TYPES = [
+  { id: "Fragrance", icon: SprayCan, placeholder: "e.g. Eau de parfum, 50 ml spray" },
+  { id: "Skincare", icon: Droplets, placeholder: "e.g. Leave-on facial serum" },
+  { id: "Cosmetics", icon: Palette, placeholder: "e.g. Long-wear liquid foundation" },
+];
+const STRATEGIES = [
+  { key: "performance", letter: "A", label: "Hero performance", blurb: "Maximum efficacy within compliant limits" },
+  { key: "clean", letter: "B", label: "Clean & sustainable", blurb: "Natural origin, biodegradable, low allergen" },
+  { key: "robust", letter: "C", label: "Robust & registrable", blurb: "Globally listed, stable, cost-efficient" },
+];
+const NPD_STATUS = {
+  generating: "Designing formula…",
+  assessing: "Running regulatory assessment…",
+  revising: "Co-Pilot revising to resolve findings…",
+  reassessing: "Re-assessing revised formula…",
+};
+// Lanes where a "high" finding means the formula itself must change. Claims
+// and supplier "high" findings at design stage are usually missing evidence.
+const FORMULA_LANES = ["regulatory", "safety", "environmental"];
+
+/* System prompts live server-side in api/ — never shipped to the browser. */
 
 /* ---------- file helpers ---------- */
 const iconFor = (name) => {
@@ -289,6 +312,151 @@ function Section({ title, kicker, icon: Icon, children }) {
   );
 }
 
+const toFileItems = (list) => Array.from(list).map((file) => ({
+  id: Math.random().toString(36).slice(2), name: file.name,
+  size: file.size, kind: kindFor(file.name), file,
+}));
+
+function FileList({ files, onRemove }) {
+  if (!files.length) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+      {files.map((f) => {
+        const I = iconFor(f.name);
+        const bad = f.kind === "unsupported";
+        return (
+          <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, background: C.ink, border: `1px solid ${bad ? C.critical + "66" : C.line}`, borderRadius: 10, padding: "8px 10px" }}>
+            <I size={17} color={bad ? C.critical : C.teal} style={{ flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+              <div style={{ fontSize: 10.5, color: bad ? C.critical : C.faint }}>{bad ? "Unsupported type" : `${f.kind.toUpperCase()} · ${fmtSize(f.size)}`}</div>
+            </div>
+            <button aria-label={`Remove ${f.name}`} onClick={() => onRemove(f.id)} style={{ background: "transparent", border: "none", cursor: "pointer", color: C.faint, display: "flex" }}><X size={15} /></button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// One upload window: numbered heading, optional controls, drop target, file list.
+function UploadWindow({ step, kicker, title, description, dropTitle, dropHint, accent, icon: Icon, files, onAdd, onRemove, children, footer }) {
+  const inputRef = useRef(null);
+  const [over, setOver] = useState(false);
+  return (
+    <div style={{ background: `linear-gradient(180deg, ${C.panel}, ${C.ink2})`, border: `1px solid ${C.line}`, borderTop: `3px solid ${accent}`, borderRadius: 16, padding: 18, display: "flex", flexDirection: "column", minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <span style={{ fontSize: 11, fontWeight: 800, color: C.ink, background: accent, borderRadius: 6, padding: "1px 7px" }}>{step}</span>
+        <Icon size={15} color={accent} />
+        <span style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: accent, fontWeight: 700 }}>{kicker}</span>
+      </div>
+      <h2 style={{ fontFamily: serif, fontSize: 19, color: C.text, margin: "4px 0 4px", fontWeight: 600 }}>{title}</h2>
+      <div style={{ fontSize: 12, color: C.mute, lineHeight: 1.5, marginBottom: 12 }}>{description}</div>
+      {children}
+      <div
+        role="button" tabIndex={0}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); inputRef.current?.click(); } }}
+        onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => { e.preventDefault(); setOver(false); if (e.dataTransfer.files?.length) onAdd(e.dataTransfer.files); }}
+        onClick={() => inputRef.current?.click()}
+        style={{ cursor: "pointer", borderRadius: 12, padding: "22px 14px", textAlign: "center", background: over ? C.panel2 : C.ink2, border: `1.5px dashed ${over ? accent : C.line}`, transition: "all .2s" }}
+      >
+        <input ref={inputRef} type="file" multiple accept=".pdf,.docx,.doc,.xlsx,.xls,.csv,.txt,.png,.jpg,.jpeg,.gif,.webp" style={{ display: "none" }}
+          onChange={(e) => { if (e.target.files?.length) onAdd(e.target.files); e.target.value = ""; }} />
+        <UploadCloud size={26} color={over ? accent : C.gold} />
+        <div style={{ fontSize: 13.5, fontWeight: 600, color: C.text, marginTop: 8 }}>{dropTitle}</div>
+        <div style={{ fontSize: 11.5, color: C.mute, marginTop: 4, lineHeight: 1.45 }}>{dropHint}</div>
+      </div>
+      <FileList files={files} onRemove={onRemove} />
+      {footer}
+    </div>
+  );
+}
+
+/* ---------- NPD helpers ---------- */
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const strList = (v, n) => Array.isArray(v) ? v.filter(Boolean).map(String).slice(0, n) : [];
+
+function normalizeFormula(p, strat) {
+  let ings = Array.isArray(p.ingredients) ? p.ingredients.filter((i) => i && i.name).slice(0, 25).map((i) => ({
+    name: String(i.name), concentration: round2(i.concentration), function: i.function || "—",
+    phase: i.phase || "—", qs: !!i.qs, rationale: i.rationale || "",
+  })) : [];
+  if (!ings.length) throw new Error("The formulation agent returned no ingredients.");
+  // Exactly one q.s. ingredient carries the balance to 100%.
+  const qsIdx = ings.findIndex((i) => i.qs);
+  ings = ings.map((i, k) => ({ ...i, qs: k === qsIdx }));
+  if (qsIdx >= 0) {
+    const others = ings.reduce((s, i, k) => (k === qsIdx ? s : s + i.concentration), 0);
+    const balance = round2(100 - others);
+    if (balance > 0) ings[qsIdx].concentration = balance;
+  }
+  const fr = p.fragrance && typeof p.fragrance === "object" && (p.fragrance.top || p.fragrance.heart || p.fragrance.base) ? p.fragrance : null;
+  return {
+    strategy: strat.key, letter: strat.letter, strategyLabel: strat.label,
+    optionName: p.optionName || strat.label,
+    productName: p.productName || "New product",
+    productType: PRODUCT_TYPES.some((t) => t.id === p.productType) ? p.productType : "Skincare",
+    category: p.category || "—", format: p.format || "", summary: p.summary || "",
+    claims: strList(p.claims, 5), pH: p.pH || "", ifraCategory: p.ifraCategory || "",
+    costTier: ["€", "€€", "€€€"].includes(p.costTier) ? p.costTier : "",
+    naturalOriginPct: p.naturalOriginPct == null || p.naturalOriginPct === "" ? null : clampPct(p.naturalOriginPct),
+    ingredients: ings,
+    total: round2(ings.reduce((s, i) => s + i.concentration, 0)),
+    fragrance: fr ? { top: fr.top || "", heart: fr.heart || "", base: fr.base || "", allergens: strList(fr.allergens, 15) } : null,
+    process: strList(p.process, 6), designNotes: strList(p.designNotes, 4), testingPlan: strList(p.testingPlan, 4),
+  };
+}
+
+// The generated formula expressed as a design-stage PIF, so it goes through
+// exactly the same assessment as an uploaded Product Information File.
+function formulaAsPif(f, markets) {
+  const lines = [
+    `DESIGN-STAGE FORMULATION generated by the Formulyx Formulation Co-Pilot from an NPD brief`,
+    `Option ${f.letter}: ${f.optionName} (${f.strategyLabel})`,
+    `Product: ${f.productName}`,
+    `Product type: ${f.productType}; Category: ${f.category}; Format: ${f.format || "—"}`,
+    `Target markets: ${markets.join(", ")}`,
+    `Intended claims: ${f.claims.join(", ") || "—"}`,
+    `Target pH: ${f.pH || "—"}; IFRA category: ${f.ifraCategory || "—"}`,
+    ``, `Formula (INCI | % w/w | Function | Phase):`,
+    ...f.ingredients.map((i) => `${i.name} | ${i.qs ? "q.s. to 100 (" + i.concentration.toFixed(2) + ")" : i.concentration.toFixed(2)} | ${i.function} | ${i.phase}`),
+    `Total: ${f.total.toFixed(2)}%`,
+  ];
+  if (f.fragrance) lines.push("", `Fragrance concept: top ${f.fragrance.top}; heart ${f.fragrance.heart}; base ${f.fragrance.base}`, `Expected declarable allergens: ${f.fragrance.allergens.join(", ") || "—"}`);
+  if (f.process.length) lines.push("", "Manufacturing process:", ...f.process.map((s, k) => `${k + 1}. ${s}`));
+  return lines.join("\n");
+}
+
+const compactFormula = (f) => ({
+  productName: f.productName, productType: f.productType, category: f.category, format: f.format,
+  claims: f.claims, pH: f.pH, ifraCategory: f.ifraCategory, fragrance: f.fragrance,
+  ingredients: f.ingredients.map(({ name, concentration, function: fn, phase, qs }) => ({ name, concentration, function: fn, phase, qs })),
+});
+
+const blockingFindings = (a) => Object.entries(a.assessments).flatMap(([lane, xs]) =>
+  xs.filter((x) => x.sev === "critical" || (x.sev === "high" && FORMULA_LANES.includes(lane))).map((x) => ({ lane, ...x })));
+
+function readinessOf(a) {
+  const b = blockingFindings(a);
+  if (b.some((x) => x.sev === "critical")) return { label: "Blocked — critical finding", c: C.critical };
+  if (b.length) return { label: "Conditional — resolve high findings", c: C.high };
+  return { label: "Compliance-cleared for lab work", c: C.pass };
+}
+
+async function postModel(url, body) {
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    let msg = t;
+    try { const j = JSON.parse(t); msg = j.error + (j.detail ? ": " + String(j.detail).slice(0, 120) : ""); } catch (_) { /* plain text error */ }
+    throw new Error(`(${res.status}) ${String(msg).slice(0, 200) || "request failed"}`);
+  }
+  const data = await res.json();
+  return (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+}
+
 /* ============================== APP =============================== */
 export default function App() {
   const [files, setFiles] = useState([]);
@@ -301,30 +469,33 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [openLane, setOpenLane] = useState("regulatory");
-  const [dragOver, setDragOver] = useState(false);
   const [rawDump, setRawDump] = useState(null);
-  const inputRef = useRef(null);
+  // "pif" = assess an uploaded formulation; "npd" = design from a brief.
+  const [mode, setMode] = useState("pif");
+  const [npdFiles, setNpdFiles] = useState([]);
+  const [npdBrief, setNpdBrief] = useState("");
+  const [npdType, setNpdType] = useState("Skincare");
+  const [npdOptions, setNpdOptions] = useState([]);
+  const [npdRunning, setNpdRunning] = useState(false);
+  const [selectedKey, setSelectedKey] = useState(null);
 
-  const addFiles = useCallback((list) => {
-    const incoming = Array.from(list).map((file) => ({
-      id: Math.random().toString(36).slice(2), name: file.name,
-      size: file.size, kind: kindFor(file.name), file,
-    }));
-    setFiles((prev) => [...prev, ...incoming]);
-    setError(null);
-  }, []);
-
-  const onDrop = (e) => { e.preventDefault(); setDragOver(false); if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files); };
+  // Convert the FileList before queuing the state update: the input is
+  // cleared right after onAdd, and React may run the updater later.
+  const addFiles = useCallback((list) => { const items = toFileItems(list); setFiles((prev) => [...prev, ...items]); setError(null); }, []);
+  const addNpdFiles = useCallback((list) => { const items = toFileItems(list); setNpdFiles((prev) => [...prev, ...items]); setError(null); }, []);
   const removeFile = (id) => setFiles((prev) => prev.filter((f) => f.id !== id));
+  const removeNpdFile = (id) => setNpdFiles((prev) => prev.filter((f) => f.id !== id));
   const toggleMarket = (m) => setMarkets((p) => p.includes(m) ? p.filter((x) => x !== m) : [...p, m]);
+  const clearRegState = () => { setRegOverride(false); setRegLog([]); setRegFiles([]); };
   const reset = () => {
     setPhase("idle"); setActiveStep(-1); setResult(null); setError(null); setOpenLane("regulatory"); setRawDump(null);
-    setRegJurisdictions([]); setRegAseanStates([]); setRegOverride(false); setRegLog([]); setRegFiles([]);
+    setRegJurisdictions([]); setRegAseanStates([]); clearRegState();
+    setMode("pif"); setNpdOptions([]); setSelectedKey(null);
   };
 
-  async function buildFilesPayload() {
+  async function buildFilesPayload(list = files) {
     const payload = [];
-    for (const f of files) {
+    for (const f of list) {
       if (f.kind === "pdf") {
         let text = "";
         try { text = await readPdfAsText(f.file); } catch (_) { /* fall through to raw handling below */ }
@@ -359,6 +530,7 @@ export default function App() {
     if (bad) { setError(`Unsupported file type: ${bad.name}. Use PDF, DOCX, XLSX, CSV, TXT or images.`); return; }
 
     setError(null); setResult(null); setRawDump(null); setPhase("running"); setActiveStep(0);
+    setMode("pif"); setSelectedKey(null); clearRegState();
     const tick = setInterval(() => setActiveStep((s) => (s < STEPS.length - 1 ? s + 1 : s)), 1600);
 
     try {
@@ -399,6 +571,94 @@ export default function App() {
     }
   };
 
+  /* ---------------- NPD: brief → 3 compliant formulations ---------------- */
+  async function assessFormula(f) {
+    const text = await postModel("/api/assess", {
+      stage: "design", productName: f.productName, category: `${f.productType} — ${f.category}`,
+      markets, claims: f.claims.join(", "),
+      files: [{ type: "text", name: `Formulyx design — Option ${f.letter}`, text: formulaAsPif(f, markets) }],
+    });
+    const a = normalize(parseLoose(text));
+    // The generated formula is the authoritative ingredient table; keep the
+    // assessor's China IECIC estimate for each ingredient.
+    const iecic = new Map(a.ingredients.map((i) => [i.name.toLowerCase(), i.chinaIecicStatus]));
+    a.ingredients = f.ingredients.map((i) => ({ name: i.name, concentration: i.concentration, function: i.function, chinaIecicStatus: iecic.get(i.name.toLowerCase()) || "Uncertain" }));
+    a.ingredientCount = f.ingredients.length;
+    a.name = `${f.productName} — Option ${f.letter}`;
+    a.category = `${f.productType} · ${f.category}`;
+    if (!a.markets.length) a.markets = [...markets];
+    if (!a.claims.length) a.claims = f.claims;
+    a.formula = f;
+    return a;
+  }
+
+  const selectOption = (o) => {
+    if (!o?.assessment) return;
+    setSelectedKey(o.key); setResult(o.assessment); setPhase("done"); setOpenLane("regulatory");
+    setRegOverride(false); setRegLog([]);
+  };
+
+  const generateNpd = async () => {
+    if (!npdFiles.length && !npdBrief.trim()) { setError("Add a new product development brief: upload documents or describe the product in the brief box."); return; }
+    const bad = npdFiles.find((f) => f.kind === "unsupported");
+    if (bad) { setError(`Unsupported file type: ${bad.name}. Use PDF, DOCX, XLSX, CSV, TXT or images.`); return; }
+    if (!markets.length) { setError("Select at least one target market so formulas can be designed to its rules."); return; }
+
+    setError(null); setRawDump(null); setMode("npd"); setResult(null); setPhase("idle"); setActiveStep(-1);
+    setSelectedKey(null); clearRegState(); setNpdRunning(true);
+    setNpdOptions(STRATEGIES.map((s) => ({ ...s, status: "generating", formula: null, assessment: null, revised: false, revisionFailed: false, error: null })));
+    const patch = (key, upd) => setNpdOptions((prev) => prev.map((o) => (o.key === key ? { ...o, ...upd } : o)));
+
+    let briefFiles;
+    try {
+      briefFiles = await buildFilesPayload(npdFiles);
+      if (npdBrief.trim()) briefFiles.push({ type: "text", name: "Brief (typed)", text: npdBrief.trim().slice(0, 12000) });
+      const approxBytes = briefFiles.reduce((sum, f) => sum + (f.data ? f.data.length * 0.75 : (f.text ? f.text.length : 0)), 0);
+      if (approxBytes > 4 * 1024 * 1024) throw new Error(`the brief is ~${(approxBytes / 1048576).toFixed(1)}MB after extraction. Trim or split the largest document.`);
+    } catch (err) {
+      setError(`Could not read the brief: ${err.message}`); setNpdOptions([]); setNpdRunning(false); return;
+    }
+
+    const ctx = { productName: name, productType: npdType, category, markets, claims };
+    const outcomes = await Promise.all(STRATEGIES.map(async (s) => {
+      try {
+        let formula = normalizeFormula(parseLoose(await postModel("/api/formulate", { ...ctx, strategy: s.key, files: briefFiles })), s);
+        patch(s.key, { status: "assessing", formula });
+        let assessment = await assessFormula(formula);
+        let revised = false, revisionFailed = false;
+        const blockers = blockingFindings(assessment);
+        if (blockers.length) {
+          // One automatic Co-Pilot revision, then the same assessment again.
+          patch(s.key, { status: "revising", assessment });
+          try {
+            const findings = blockers.map(({ lane, sev, ing, title, detail, fix }) => ({ lane, sev, ing, title, detail, fix }));
+            const f2 = normalizeFormula(parseLoose(await postModel("/api/formulate", { ...ctx, strategy: s.key, revise: { formula: compactFormula(formula), findings } })), s);
+            patch(s.key, { status: "reassessing", formula: f2 });
+            const a2 = await assessFormula(f2);
+            formula = f2; assessment = a2; revised = true;
+          } catch (_) {
+            revisionFailed = true; // keep the first, fully assessed version
+          }
+        }
+        const done = { status: "done", formula, assessment, revised, revisionFailed };
+        patch(s.key, done);
+        return { ...s, ...done };
+      } catch (err) {
+        patch(s.key, { status: "error", error: err.message });
+        return null;
+      }
+    }));
+    setNpdRunning(false);
+
+    // Open the strongest option: fewest blocking findings, then lowest risk.
+    const riskRank = { Low: 0, Medium: 1, High: 2, Critical: 3 };
+    const best = outcomes.filter(Boolean).sort((a, b) =>
+      blockingFindings(a.assessment).length - blockingFindings(b.assessment).length ||
+      riskRank[a.assessment.decision.risk] - riskRank[b.assessment.decision.risk])[0];
+    if (best) selectOption(best);
+    else setError("No formulation could be generated. Check the brief and try again.");
+  };
+
   const laneCount = (lane) => {
     const arr = result?.assessments[lane] || [];
     const worst = arr.reduce((acc, x) => Math.min(acc, OK_SEV.indexOf(x.sev)), 3);
@@ -411,6 +671,35 @@ export default function App() {
   // person opens that file in their own browser and uses Print > Save as
   // PDF there, where printing isn't sandboxed.
   const esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+  const reportHeading = (t) => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><div style="width:3px;height:16px;background:#C9A85C"></div><div style="font-size:13px;font-weight:700;color:#0B1B30">${esc(t)}</div></div>`;
+  const reportList = (title, items) => items.length ? `<div style="page-break-inside:avoid"><div style="font-size:10.5px;font-weight:700;color:#0B1B30;margin-bottom:4px">${esc(title)}</div>${items.map((s) => `<div style="font-size:10px;color:#1B2A3D;padding:1.5px 0;line-height:1.45">• ${esc(s)}</div>`).join("")}</div>` : "";
+
+  // Formula table, fragrance concept, process and notes for a generated option.
+  function formulaReportHtml(f) {
+    const meta = [["Strategy", `Option ${f.letter} · ${f.strategyLabel}`], ["Format", f.format], ["Target pH", f.pH], ["IFRA category", f.ifraCategory],
+      ["Natural origin (ISO 16128, est.)", f.naturalOriginPct == null ? "" : f.naturalOriginPct + "%"], ["Cost tier", f.costTier]]
+      .filter(([, v]) => v).map(([l, v]) => `<span style="display:inline-block;margin:0 6px 6px 0;border:0.75px solid #D8DEE6;border-radius:4px;padding:3px 8px;font-size:9.5px;color:#1B2A3D"><span style="color:#5F7183">${esc(l)}:</span> ${esc(v)}</span>`).join("");
+    const rows = f.ingredients.map((i, k) => `<tr style="background:${k % 2 ? "#F5F7FA" : "#fff"}"><td style="padding:5px 8px;font-size:9.5px;color:#5F7183">${esc(i.phase)}</td><td style="padding:5px 8px;font-size:10px;color:#1B2A3D;font-weight:600">${esc(i.name)}</td><td style="padding:5px 8px;font-size:10px;color:#1B2A3D;text-align:right;white-space:nowrap">${i.qs ? "q.s. " : ""}${i.concentration.toFixed(2)}</td><td style="padding:5px 8px;font-size:9.5px;color:#5F7183">${esc(i.function)}</td><td style="padding:5px 8px;font-size:9.5px;color:#5F7183">${esc(i.rationale)}</td></tr>`).join("");
+    const totalOk = Math.abs(f.total - 100) < 0.011;
+    const fragHtml = f.fragrance ? `<div style="margin-top:12px;font-size:10px;color:#1B2A3D;line-height:1.55"><b>Olfactive pyramid</b> — Top: ${esc(f.fragrance.top)} · Heart: ${esc(f.fragrance.heart)} · Base: ${esc(f.fragrance.base)}${f.fragrance.allergens.length ? `<br/><b>Expected declarable allergens:</b> ${esc(f.fragrance.allergens.join(", "))}` : ""}</div>` : "";
+    return `
+      <div style="padding:0 28px 18px">
+        ${reportHeading(`Proposed formulation — ${f.optionName}`)}
+        ${f.summary ? `<div style="font-size:10.5px;color:#1B2A3D;line-height:1.5;margin-bottom:8px">${esc(f.summary)}</div>` : ""}
+        <div>${meta}</div>
+        <table style="width:100%;border-collapse:collapse;margin-top:6px">
+          <thead><tr style="background:#0B1B30">${["Phase", "INCI", "% w/w", "Function", "Rationale"].map((h) => `<th style="color:#fff;text-align:${h === "% w/w" ? "right" : "left"};padding:6px 8px;font-size:8.5px;text-transform:uppercase">${h}</th>`).join("")}</tr></thead>
+          <tbody>${rows}<tr><td></td><td style="padding:6px 8px;font-size:10px;font-weight:700;color:#0B1B30">Total</td><td style="padding:6px 8px;font-size:10px;font-weight:700;text-align:right;color:${totalOk ? "#2E7D52" : "#C0392B"}">${f.total.toFixed(2)}</td><td colspan="2"></td></tr></tbody>
+        </table>
+        ${fragHtml}
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:12px">
+          ${reportList("Manufacturing process", f.process.map((s, k) => `${k + 1}. ${s}`))}
+          ${reportList("Compliance by design", f.designNotes)}
+          ${reportList("Testing plan", f.testingPlan)}
+        </div>
+      </div>`;
+  }
 
   function buildReportHTML(r) {
     const riskColor = { Critical: "#C0392B", High: "#B9770E", Medium: "#2C6FA6", Low: "#2E7D52" }[r.decision.risk] || "#2C6FA6";
@@ -476,7 +765,7 @@ export default function App() {
 <body>
   <div style="background:#0B1B30;color:#fff;padding:22px 28px;border-bottom:4px solid #C9A85C">
     <div style="font-size:20px;font-weight:700">FoundryIQ <span style="color:#D9BE77;font-weight:400">· Compliance Intelligence</span></div>
-    <div style="font-size:11px;color:#B7C4D6;margin-top:4px">Regulatory &amp; Environmental Assessment — Product Information File</div>
+    <div style="font-size:11px;color:#B7C4D6;margin-top:4px">Regulatory &amp; Environmental Assessment — ${r.formula ? "Design-stage formulation from an NPD brief" : "Product Information File"}</div>
     <div style="font-size:9.5px;color:#8FA0B8;margin-top:8px">Generated ${esc(new Date().toLocaleString())} · Confidential — for internal regulatory review</div>
   </div>
 
@@ -502,6 +791,8 @@ export default function App() {
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">${statsHtml}</div>
     ${missingHtml}
   </div>
+
+  ${r.formula ? formulaReportHtml(r.formula) : ""}
 
   ${ledgerHtml}
 
@@ -543,6 +834,53 @@ export default function App() {
   const downloadReport = () => {
     if (!result) return;
     triggerDownload(`FoundryIQ_Compliance_${safeName(result.name)}.html`, buildReportHTML(result));
+  };
+
+  // All three options side by side, for the NPD review meeting.
+  function buildNpdPackHTML(opts) {
+    const done = opts.filter((o) => o.status === "done");
+    const sevColor = { critical: "#C0392B", high: "#B9770E", medium: "#2C6FA6" };
+    const compare = done.map((o, k) => {
+      const a = o.assessment, rd = readinessOf(a);
+      const counts = ["critical", "high", "medium"].map((s) => `<span style="color:${sevColor[s]};font-weight:700">${Object.values(a.assessments).flat().filter((x) => x.sev === s).length}</span>`).join(" / ");
+      return `<tr style="background:${k % 2 ? "#F5F7FA" : "#fff"}"><td style="padding:6px 8px;font-size:10px;font-weight:700;color:#0B1B30">Option ${o.letter} — ${esc(o.formula.optionName)}</td><td style="padding:6px 8px;font-size:10px;color:#5F7183">${esc(o.label)}</td><td style="padding:6px 8px;font-size:10px;font-weight:700">${esc(a.decision.risk)}</td><td style="padding:6px 8px;font-size:10px">${esc(rd.label)}${o.revised ? " (revised once)" : ""}</td><td style="padding:6px 8px;font-size:10px">${counts}</td><td style="padding:6px 8px;font-size:10px;color:#5F7183">${o.formula.naturalOriginPct == null ? "—" : o.formula.naturalOriginPct + "%"}</td><td style="padding:6px 8px;font-size:10px;color:#5F7183">${esc(o.formula.costTier || "—")}</td></tr>`;
+    }).join("");
+    const sections = done.map((o) => {
+      const findings = Object.entries(o.assessment.assessments).flatMap(([lane, xs]) => xs.map((x) => ({ lane, ...x })));
+      const fHtml = findings.length ? findings.map((x) => `<div style="border-left:3px solid ${sevColor[x.sev] || "#2C6FA6"};padding-left:9px;margin-bottom:7px;page-break-inside:avoid"><div style="font-size:10px;font-weight:700;color:#0B1B30">${esc(x.title)} <span style="font-weight:400;color:#5F7183">· ${esc(x.lane)} · ${esc(x.ing)}</span></div><div style="font-size:9.5px;color:#1B2A3D">${esc(x.detail)}</div>${x.fix ? `<div style="font-size:9.5px;color:#0E7C63">Fix — ${esc(x.fix)}</div>` : ""}</div>`).join("") : `<div style="font-size:10px;color:#5F7183;font-style:italic">No findings raised.</div>`;
+      return `<div style="page-break-before:always;padding-top:18px">${formulaReportHtml(o.formula)}<div style="padding:0 28px 18px">${reportHeading("Assessment findings")}${fHtml}<div style="font-size:10px;color:#1B2A3D;margin-top:8px"><b>Recommendation:</b> ${esc(o.assessment.decision.recommendation)}</div></div></div>`;
+    }).join("");
+    const first = done[0]?.formula;
+    return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/><title>Formulyx NPD Formulation Pack — ${esc(first?.productName || "New product")}</title>
+<style>@page{margin:14mm} *{box-sizing:border-box} body{font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:0;background:#fff;color:#1B2A3D}</style></head>
+<body>
+  <div style="background:#0B1B30;color:#fff;padding:22px 28px;border-bottom:4px solid #C9A85C">
+    <div style="font-size:20px;font-weight:700">Formulyx <span style="color:#D9BE77;font-weight:400">· Formulation Intelligence</span></div>
+    <div style="font-size:11px;color:#B7C4D6;margin-top:4px">New product development — three compliant-by-design starting formulations</div>
+    <div style="font-size:9.5px;color:#8FA0B8;margin-top:8px">Generated ${esc(new Date().toLocaleString())} · Confidential — for internal R&amp;D and regulatory review</div>
+  </div>
+  <div style="padding:18px 28px 6px">
+    <div style="font-size:18px;font-weight:700;color:#0B1B30">${esc(first?.productName || "New product")}</div>
+    <div style="font-size:11px;color:#5F7183;margin-top:4px">${esc(npdType)} · Markets: ${esc(markets.join(", "))}</div>
+  </div>
+  <div style="padding:10px 28px 18px">
+    ${reportHeading("Option comparison")}
+    <table style="width:100%;border-collapse:collapse"><thead><tr style="background:#0B1B30">${["Option", "Strategy", "Risk", "Readiness", "Crit / High / Watch", "Natural origin", "Cost"].map((h) => `<th style="color:#fff;text-align:left;padding:6px 8px;font-size:8.5px;text-transform:uppercase">${h}</th>`).join("")}</tr></thead><tbody>${compare}</tbody></table>
+    <div style="font-size:9.5px;color:#5F7183;margin-top:8px;line-height:1.5">Each option was assessed by the same regulatory workflow used for submitted Product Information Files. Options with critical or high formula findings were revised once by the Co-Pilot and re-assessed.</div>
+  </div>
+  ${sections}
+  <div style="margin:20px 28px;border:1px solid #C9A85C;border-radius:6px;padding:12px 16px">
+    <div style="font-size:10.5px;font-weight:700;color:#0B1B30">Starting formulations for laboratory development — not approved for launch</div>
+    <div style="font-size:9.5px;color:#5F7183;margin-top:4px;line-height:1.5">Each option needs bench work, stability, compatibility and safety assessment, supplier documentation and sign-off by Regulatory Affairs, Toxicology and Quality before any launch decision.</div>
+  </div>
+</body></html>`;
+  }
+
+  const downloadNpdPack = () => {
+    const done = npdOptions.filter((o) => o.status === "done");
+    if (!done.length) return;
+    triggerDownload(`Formulyx_NPD_Pack_${safeName(done[0].formula.productName)}.html`, buildNpdPackHTML(npdOptions));
   };
 
   /* ================================================================ */
@@ -817,74 +1155,88 @@ export default function App() {
             <Layers size={18} color={C.ink} />
           </div>
           <div>
-            <div style={{ fontFamily: serif, fontSize: 20, fontWeight: 600 }}>FoundryIQ <span style={{ color: C.gold }}>·</span> PIF Assessment</div>
-            <div style={{ fontSize: 11.5, color: C.mute }}>Upload a Product Information File — agents extract the formulation, assess it, and recommend a decision</div>
+            <h1 style={{ fontFamily: serif, fontSize: 20, fontWeight: 600, margin: 0 }}>Formulyx <span style={{ color: C.gold }}>·</span> Formulation Intelligence <span style={{ fontFamily: sans, fontSize: 11, color: C.faint, fontWeight: 500 }}>by FoundryIQ</span></h1>
+            <div style={{ fontSize: 11.5, color: C.mute }}>Design new formulations that are compliant from day one, or assess an existing Product Information File before launch</div>
           </div>
         </div>
 
-        <div
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={onDrop}
-          onClick={() => inputRef.current?.click()}
-          style={{ cursor: "pointer", borderRadius: 16, padding: "34px 20px", textAlign: "center", marginBottom: 14, background: dragOver ? C.panel2 : `linear-gradient(180deg, ${C.panel}, ${C.ink2})`, border: `1.5px dashed ${dragOver ? C.teal : C.line}`, transition: "all .2s" }}
-        >
-          <input ref={inputRef} type="file" multiple accept=".pdf,.docx,.doc,.xlsx,.xls,.csv,.txt,.png,.jpg,.jpeg,.gif,.webp" style={{ display: "none" }}
-            onChange={(e) => { if (e.target.files?.length) addFiles(e.target.files); e.target.value = ""; }} />
-          <UploadCloud size={30} color={dragOver ? C.teal : C.gold} />
-          <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginTop: 10 }}>Drop your Product Information File here</div>
-          <div style={{ fontSize: 12, color: C.mute, marginTop: 4 }}>or click to browse — PDF, Word, Excel, CSV, or images. Add the formula sheet, SDS, IFRA certificates, claims brief, and supplier specs.</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,340px),1fr))", gap: 14, marginBottom: 14 }}>
+          <UploadWindow
+            step="01" kicker="Regulatory intelligence" icon={Gavel} accent={C.gold}
+            title="Assess an existing formulation"
+            description="Agents extract the formula from your Product Information File, assess it in every target market and recommend a launch decision."
+            dropTitle="Drop your Product Information File"
+            dropHint="PDF, Word, Excel, CSV or images: formula sheet, SDS, IFRA certificates, claims brief, supplier specs."
+            files={files} onAdd={addFiles} onRemove={removeFile}
+          />
+          <UploadWindow
+            step="02" kicker="Formulation intelligence" icon={Wand2} accent={C.teal}
+            title="Start a new product development"
+            description="Upload a new product development (NPD) brief. The Co-Pilot designs three starting formulations and runs each through the same regulatory workflow."
+            dropTitle="Drop your NPD brief"
+            dropHint="Brief deck, concept board, benchmark INCI lists, claims targets or free-from lists."
+            files={npdFiles} onAdd={addNpdFiles} onRemove={removeNpdFile}
+            footer={
+              <label style={{ display: "block", marginTop: 12 }}>
+                <span style={fieldLabel}>Or describe the brief</span>
+                <textarea value={npdBrief} onChange={(e) => setNpdBrief(e.target.value)} rows={3}
+                  placeholder="e.g. Brightening day serum for 30-45s, lightweight gel texture, fragrance-free, vegan, premium price point, hero claim: visibly more even tone in 4 weeks"
+                  style={{ ...inputStyle, resize: "vertical", lineHeight: 1.45 }} />
+              </label>
+            }
+          >
+            <div style={{ marginBottom: 12 }}>
+              <span style={fieldLabel}>Product type</span>
+              <div role="radiogroup" aria-label="Product type" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 6, marginTop: 6 }}>
+                {PRODUCT_TYPES.map((t) => {
+                  const on = npdType === t.id; const TI = t.icon;
+                  return (
+                    <button key={t.id} role="radio" aria-checked={on} onClick={() => setNpdType(t.id)} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "8px 6px", borderRadius: 9, background: on ? C.teal + "22" : C.ink, color: on ? C.teal : C.mute, border: `1px solid ${on ? C.teal : C.line}` }}>
+                      <TI size={14} /> {t.id}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </UploadWindow>
         </div>
-
-        {files.length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: 8, marginBottom: 18 }}>
-            {files.map((f) => {
-              const I = iconFor(f.name);
-              const bad = f.kind === "unsupported";
-              return (
-                <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, background: C.ink2, border: `1px solid ${bad ? C.critical + "66" : C.line}`, borderRadius: 10, padding: "9px 11px" }}>
-                  <I size={18} color={bad ? C.critical : C.teal} style={{ flexShrink: 0 }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12.5, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
-                    <div style={{ fontSize: 10.5, color: bad ? C.critical : C.faint }}>{bad ? "Unsupported type" : `${f.kind.toUpperCase()} · ${fmtSize(f.size)}`}</div>
-                  </div>
-                  <button onClick={(e) => { e.stopPropagation(); removeFile(f.id); }} style={{ background: "transparent", border: "none", cursor: "pointer", color: C.faint, display: "flex" }}><X size={15} /></button>
-                </div>
-              );
-            })}
-          </div>
-        )}
 
         <div style={{ background: `linear-gradient(180deg, ${C.panel}, ${C.ink2})`, border: `1px solid ${C.line}`, borderRadius: 16, padding: 18, marginBottom: 18 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
             <Beaker size={15} color={C.teal} />
-            <span style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: C.teal, fontWeight: 700 }}>Context (optional — agents infer what you leave blank)</span>
+            <span style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: C.teal, fontWeight: 700 }}>Context for both workflows (optional — agents infer what you leave blank)</span>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-            <label><span style={fieldLabel}>Product name</span><input value={name} onChange={(e) => setName(e.target.value)} placeholder="Leave blank to extract from the file" style={inputStyle} /></label>
-            <label><span style={fieldLabel}>Category</span><input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. Leave-on facial serum" style={inputStyle} /></label>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,220px),1fr))", gap: 12, marginBottom: 12 }}>
+            <label><span style={fieldLabel}>Product name</span><input value={name} onChange={(e) => setName(e.target.value)} placeholder="Leave blank to extract or propose" style={inputStyle} /></label>
+            <label><span style={fieldLabel}>Category / format</span><input value={category} onChange={(e) => setCategory(e.target.value)} placeholder={(PRODUCT_TYPES.find((t) => t.id === npdType) || PRODUCT_TYPES[1]).placeholder} style={inputStyle} /></label>
           </div>
           <div style={{ marginBottom: 12 }}>
             <span style={fieldLabel}>Target markets</span>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 6 }}>
               {MARKET_OPTIONS.map((m) => {
                 const on = markets.includes(m);
-                return <button key={m} onClick={() => toggleMarket(m)} style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 999, background: on ? C.teal + "22" : "transparent", color: on ? C.teal : C.mute, border: `1px solid ${on ? C.teal : C.line}` }}>{m}</button>;
+                return <button key={m} aria-pressed={on} onClick={() => toggleMarket(m)} style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 999, background: on ? C.teal + "22" : "transparent", color: on ? C.teal : C.mute, border: `1px solid ${on ? C.teal : C.line}` }}>{m}</button>;
               })}
             </div>
           </div>
-          <label><span style={fieldLabel}>Intended claims</span><input value={claims} onChange={(e) => setClaims(e.target.value)} placeholder="e.g. Anti-aging, Brightening, Natural" style={inputStyle} /></label>
+          <label><span style={fieldLabel}>Intended claims</span><input value={claims} onChange={(e) => setClaims(e.target.value)} placeholder="e.g. Anti-aging, Brightening, Long-lasting, Natural" style={inputStyle} /></label>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 14, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 14, padding: "14px 16px", marginBottom: error ? 12 : 22 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{files.length ? `${files.length} document${files.length > 1 ? "s" : ""} ready` : "No documents yet"}</div>
-            <div style={{ fontSize: 11.5, color: C.mute }}>The Assistant reads every file, builds a Trusted Case, and the Analyst + Guardian assess it. Output is a draft for human validation.</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 14, padding: "14px 16px", marginBottom: error ? 12 : 22, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 260px", minWidth: 0 }}>
+            <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>
+              {files.length ? `${files.length} PIF document${files.length > 1 ? "s" : ""}` : "No PIF yet"} · {npdFiles.length || npdBrief.trim() ? `NPD brief ready (${npdType})` : "No NPD brief yet"}
+            </div>
+            <div style={{ fontSize: 11.5, color: C.mute }}>Every formula, uploaded or generated, passes through the same Trusted Case, assessment and risk decision. Output is a draft for human validation.</div>
           </div>
-          {phase !== "idle" && <button onClick={reset} style={{ background: "transparent", color: C.mute, border: `1px solid ${C.line}`, borderRadius: 9, padding: "9px 12px", fontSize: 12, cursor: "pointer" }}>Reset</button>}
-          <button onClick={run} disabled={phase === "running"} style={{ display: "flex", alignItems: "center", gap: 8, background: phase === "running" ? C.panel2 : `linear-gradient(135deg, ${C.gold}, ${C.goldDim})`, color: phase === "running" ? C.mute : C.ink, border: "none", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 700, cursor: phase === "running" ? "default" : "pointer", whiteSpace: "nowrap" }}>
+          {(phase !== "idle" || npdOptions.length > 0) && <button onClick={reset} disabled={npdRunning || phase === "running"} style={{ background: "transparent", color: C.mute, border: `1px solid ${C.line}`, borderRadius: 9, padding: "9px 12px", fontSize: 12, cursor: "pointer" }}>Reset</button>}
+          <button onClick={run} disabled={phase === "running" || npdRunning || !files.length} style={{ display: "flex", alignItems: "center", gap: 8, background: phase === "running" || npdRunning || !files.length ? C.panel2 : `linear-gradient(135deg, ${C.gold}, ${C.goldDim})`, color: phase === "running" || npdRunning || !files.length ? C.mute : C.ink, border: "none", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 700, cursor: phase === "running" || npdRunning || !files.length ? "default" : "pointer", whiteSpace: "nowrap" }}>
             {phase === "running" ? <Loader2 size={15} className="spin" /> : <Sparkles size={15} />}
-            {phase === "running" ? "Assessing…" : phase === "done" ? "Re-run assessment" : "Assess PIF"}
+            {phase === "running" ? "Assessing…" : mode === "pif" && phase === "done" ? "Re-run assessment" : "01 · Assess PIF"}
+          </button>
+          <button onClick={generateNpd} disabled={npdRunning || phase === "running" || (!npdFiles.length && !npdBrief.trim())} style={{ display: "flex", alignItems: "center", gap: 8, background: npdRunning || phase === "running" || (!npdFiles.length && !npdBrief.trim()) ? C.panel2 : `linear-gradient(135deg, ${C.teal}, #1FA595)`, color: npdRunning || phase === "running" || (!npdFiles.length && !npdBrief.trim()) ? C.mute : C.ink, border: "none", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 700, cursor: npdRunning || phase === "running" || (!npdFiles.length && !npdBrief.trim()) ? "default" : "pointer", whiteSpace: "nowrap" }}>
+            {npdRunning ? <Loader2 size={15} className="spin" /> : <Wand2 size={15} />}
+            {npdRunning ? "Designing formulas…" : "02 · Generate 3 compliant formulas"}
           </button>
         </div>
 
@@ -901,7 +1253,7 @@ export default function App() {
           </div>
         )}
 
-        {phase !== "idle" && (
+        {mode === "pif" && phase !== "idle" && (
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${STEPS.length}, 1fr)`, gap: 8, marginBottom: 26 }}>
             {STEPS.map((s, i) => {
               const done = phase === "done" || i < activeStep;
@@ -920,6 +1272,118 @@ export default function App() {
             })}
           </div>
         )}
+
+        {mode === "npd" && npdOptions.length > 0 && (
+          <Section kicker="Formulation Co-Pilot + Guardian" title="Compliant-by-design formulation options" icon={FlaskRound}>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+              <div style={{ fontSize: 12.5, color: C.mute, lineHeight: 1.5, flex: "1 1 320px" }}>
+                Three starting formulations, one per design strategy. Each goes through the same regulatory workflow as an uploaded PIF. Any option with critical or high formula findings is revised once by the Co-Pilot and re-assessed. Select an option to see its formula and full assessment.
+              </div>
+              {!npdRunning && npdOptions.some((o) => o.status === "done") && (
+                <button onClick={downloadNpdPack} style={{ display: "flex", alignItems: "center", gap: 8, background: "transparent", color: C.text, border: `1px solid ${C.line}`, borderRadius: 10, padding: "8px 13px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
+                  <Download size={14} /> Download NPD pack (3 options)
+                </button>
+              )}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,250px),1fr))", gap: 10 }}>
+              {npdOptions.map((o) => {
+                const done = o.status === "done" && o.assessment;
+                const selected = selectedKey === o.key;
+                const rd = done ? readinessOf(o.assessment) : null;
+                const all = done ? Object.values(o.assessment.assessments).flat() : [];
+                return (
+                  <button key={o.key} onClick={() => done && selectOption(o)} disabled={!done} aria-pressed={selected}
+                    style={{ textAlign: "left", cursor: done ? "pointer" : "default", background: selected ? `linear-gradient(180deg, ${C.panel2}, ${C.panel})` : C.ink2, border: `1px solid ${selected ? C.gold : C.line}`, borderRadius: 12, padding: 14, color: C.text, fontFamily: sans, display: "flex", flexDirection: "column", gap: 8, minHeight: 168 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 10.5, letterSpacing: 1.2, textTransform: "uppercase", color: C.gold, fontWeight: 700 }}>Option {o.letter} · {o.label}</span>
+                      {o.revised && <span style={{ fontSize: 10, fontWeight: 700, color: C.teal, background: C.teal + "1a", border: `1px solid ${C.teal}55`, borderRadius: 999, padding: "1px 7px", whiteSpace: "nowrap" }}>Revised once</span>}
+                    </div>
+                    <div style={{ fontFamily: serif, fontSize: 17, lineHeight: 1.25 }}>{o.formula?.optionName || o.blurb}</div>
+                    {o.status === "error" ? (
+                      <div style={{ display: "flex", gap: 6, fontSize: 11.5, color: C.critical, lineHeight: 1.4 }}><AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} /> {o.error}</div>
+                    ) : !done ? (
+                      <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: C.mute }}><Loader2 size={14} color={C.teal} className="spin" /> {NPD_STATUS[o.status] || "Working…"}</div>
+                    ) : (
+                      <>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, fontWeight: 700, color: rd.c }}><CheckCircle2 size={14} /> {rd.label}</div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {["critical", "high", "medium"].map((s) => {
+                            const n = all.filter((x) => x.sev === s).length;
+                            return <span key={s} style={{ fontSize: 10.5, fontWeight: 700, color: n ? SEV[s].c : C.faint, background: (n ? SEV[s].c : C.faint) + "18", borderRadius: 999, padding: "2px 8px" }}>{n} {SEV[s].label}</span>;
+                          })}
+                        </div>
+                        <div style={{ fontSize: 11, color: C.faint, marginTop: "auto" }}>
+                          Risk {o.assessment.decision.risk} · {o.formula.ingredients.length} ingredients
+                          {o.formula.naturalOriginPct != null ? ` · ${o.formula.naturalOriginPct}% natural origin` : ""}
+                          {o.formula.costTier ? ` · ${o.formula.costTier}` : ""}
+                        </div>
+                        {o.revisionFailed && <div style={{ fontSize: 10.5, color: C.high }}>Automatic revision failed — showing first assessed version.</div>}
+                      </>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </Section>
+        )}
+
+        {mode === "npd" && (() => {
+          const o = npdOptions.find((x) => x.key === selectedKey);
+          const f = o?.status === "done" ? o.formula : null;
+          if (!f) return null;
+          const totalOk = Math.abs(f.total - 100) < 0.011;
+          const meta = [["Format", f.format], ["Target pH", f.pH], ["IFRA category", f.ifraCategory], ["Natural origin (est.)", f.naturalOriginPct == null ? "" : f.naturalOriginPct + "%"], ["Cost tier", f.costTier]].filter(([, v]) => v);
+          const cell = { padding: "7px 8px", borderBottom: `1px solid ${C.line}22`, verticalAlign: "top" };
+          return (
+            <Section kicker={`Option ${f.letter} · ${f.strategyLabel}`} title={`${f.optionName} — ${f.productName}`} icon={Beaker}>
+              {f.summary && <div style={{ fontSize: 13, color: C.text, lineHeight: 1.55, marginBottom: 10 }}>{f.summary}</div>}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
+                {meta.map(([l, v]) => <span key={l} style={{ fontSize: 11.5, background: C.ink2, border: `1px solid ${C.line}`, borderRadius: 8, padding: "4px 9px", color: C.text }}><span style={{ color: C.faint }}>{l}:</span> {v}</span>)}
+                {f.claims.map((c) => <span key={c} style={{ fontSize: 11.5, background: C.gold + "18", border: `1px solid ${C.gold}44`, borderRadius: 8, padding: "4px 9px", color: C.gold }}>{c}</span>)}
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 620 }}>
+                  <thead><tr>{["Phase", "INCI", "% w/w", "Function", "Rationale"].map((h) => <th key={h} style={{ padding: "6px 8px", textAlign: h === "% w/w" ? "right" : "left", fontWeight: 600, borderBottom: `1px solid ${C.line}`, fontSize: 10.5, textTransform: "uppercase", color: C.faint }}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {f.ingredients.map((i, k) => (
+                      <tr key={k}>
+                        <td style={{ ...cell, color: C.faint, whiteSpace: "nowrap" }}>{i.phase}</td>
+                        <td style={{ ...cell, color: C.text, fontWeight: 600 }}>{i.name}</td>
+                        <td style={{ ...cell, color: C.text, textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{i.qs && <span style={{ color: C.faint, fontSize: 10.5 }}>q.s. </span>}{i.concentration.toFixed(2)}</td>
+                        <td style={{ ...cell, color: C.mute }}>{i.function}</td>
+                        <td style={{ ...cell, color: C.faint }}>{i.rationale}</td>
+                      </tr>
+                    ))}
+                    <tr>
+                      <td style={cell}></td>
+                      <td style={{ ...cell, color: C.text, fontWeight: 700 }}>Total</td>
+                      <td style={{ ...cell, textAlign: "right", fontWeight: 700, color: totalOk ? C.pass : C.critical, fontVariantNumeric: "tabular-nums" }}>{f.total.toFixed(2)}</td>
+                      <td style={{ ...cell, color: totalOk ? C.faint : C.critical }} colSpan={2}>{totalOk ? "" : "Does not sum to 100% — rebalance before lab work."}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              {f.fragrance && (
+                <div style={{ marginTop: 14, background: C.ink2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "11px 13px", fontSize: 12.5, color: C.mute, lineHeight: 1.6 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, color: C.text, fontWeight: 700, marginBottom: 4 }}><SprayCan size={14} color={C.gold} /> Olfactive pyramid</div>
+                  <div><b style={{ color: C.text }}>Top:</b> {f.fragrance.top}</div>
+                  <div><b style={{ color: C.text }}>Heart:</b> {f.fragrance.heart}</div>
+                  <div><b style={{ color: C.text }}>Base:</b> {f.fragrance.base}</div>
+                  {f.fragrance.allergens.length > 0 && <div style={{ marginTop: 4 }}><b style={{ color: C.high }}>Expected declarable allergens:</b> {f.fragrance.allergens.join(", ")}</div>}
+                </div>
+              )}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,220px),1fr))", gap: 10, marginTop: 14 }}>
+                {[["Manufacturing process", f.process.map((s, k) => `${k + 1}. ${s}`), Layers], ["Compliance by design", f.designNotes, CheckCircle2], ["Testing plan", f.testingPlan, ListChecks]].map(([t, items, I]) => (
+                  <div key={t} style={{ background: C.ink2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "11px 13px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}><I size={14} color={C.teal} /> {t}</div>
+                    {items.length ? items.map((s, k) => <div key={k} style={{ fontSize: 12, color: C.mute, lineHeight: 1.5, padding: "2px 0" }}>{s}</div>) : <div style={{ fontSize: 12, color: C.faint }}>—</div>}
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 11.5, color: C.faint, marginTop: 14 }}>The full assessment for this option (Trusted Case, findings, risk decision and registration documents) follows below.</div>
+            </Section>
+          );
+        })()}
 
         {result && phase === "done" && (
           <>
@@ -1135,7 +1599,7 @@ export default function App() {
         )}
 
         <div style={{ fontSize: 10.5, color: C.faint, textAlign: "center", marginTop: 26, lineHeight: 1.6 }}>
-          Findings are AI-generated drafts grounded in EU 1223/2009, UK Cosmetics Regulations, US FDA / MoCRA, REACH and IFRA — illustrative and requiring human validation against official sources before any release decision.
+          Formulations and findings are AI-generated drafts grounded in EU 1223/2009, UK Cosmetics Regulations, US FDA / MoCRA, China CSAR, ASEAN, REACH and IFRA. Generated formulas are starting points for laboratory development, and every output requires human validation against official sources before any launch decision.
         </div>
       </div>
 
