@@ -37,6 +37,17 @@ test('production server serves the built app and routes assessment requests safe
     assert.equal(missingKey.status, 500);
     assert.match((await missingKey.json()).error, /ANTHROPIC_API_KEY/);
     assert.equal((await post(JSON.stringify({ text: 'a'.repeat(6 * 1024 * 1024) }))).status, 413);
+
+    // The formulation endpoint shares the same routing and request guards.
+    assert.equal((await fetch(base + '/api/formulate')).status, 405);
+    assert.equal((await fetch(base + '/api/formulate', { method: 'OPTIONS' })).status, 204);
+    const postF = (body, type = 'application/json') => fetch(base + '/api/formulate', { method: 'POST', headers: { 'Content-Type': type }, body });
+    assert.equal((await postF('{}', 'text/plain')).status, 415);
+    assert.equal((await postF('{"files":[1]}')).status, 400);
+    const fMissingKey = await postF('{"strategy":"clean","productType":"Skincare","files":[]}');
+    assert.equal(fMissingKey.status, 500);
+    assert.match((await fMissingKey.json()).error, /ANTHROPIC_API_KEY/);
+    assert.equal((await fetch(base + '/api/formulatex')).status, 404);
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill();
